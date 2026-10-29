@@ -197,14 +197,15 @@ class SoftActorCritic(nn.Module):
         # Compute target values
         with torch.no_grad():
             # TODO(Section 3.2): Sample from the actor and compute next Q-values
-            next_action_distribution = self.actor(next_obs) # (B,)
+            next_action_distribution = self.actor(next_obs) # Distribution over (B, D) actions
             next_action = next_action_distribution.sample() # (B, D)
             next_qs = self.target_critic(next_obs, next_action) # (N, B)
             # ENDTODO
 
             if self.use_entropy_bonus and self.backup_entropy:
                 # TODO(Section 3.3): Add entropy bonus to the target values for SAC
-                next_action_entropy = None
+                next_action_entropy = self.entropy(next_action_distribution) # (B,)
+                next_qs = next_qs + self.get_temperature() * next_action_entropy
                 # Hint: next_qs = ...
                 # ENDTODO
 
@@ -250,7 +251,9 @@ class SoftActorCritic(nn.Module):
 
         # TODO(Section 3.3): Compute the entropy of the action distribution.
         # Note: Think about whether to use .rsample() or .sample() here...
-        return None
+        action = action_distribution.rsample() # (B, D)
+        entropy = -action_distribution.log_prob(action) # (B,)
+        return entropy
         # ENDTODO
 
     def actor_loss_reparametrize(self, obs: torch.Tensor):
@@ -261,12 +264,12 @@ class SoftActorCritic(nn.Module):
 
         # TODO(Section 3.4): Sample actions using reparameterization (replace the placeholder below)
         # Note: Think about whether to use .rsample() or .sample() here, and why...
-        action = torch.zeros(batch_size, self.action_dim, device=obs.device) # replace this with the correct action
+        action = action_distribution.rsample() # (B, D)
         assert action.shape == (batch_size, self.action_dim), action.shape
         # ENDTODO
 
         # TODO(Section 3.4): Compute Q-values for the sampled state-action pair (replace the placeholder below)
-        q_values = torch.zeros(self.num_critic_networks, batch_size, device=obs.device) # replace this with the correct q_values
+        q_values = self.critic(obs, action) # (N, B)
         assert q_values.shape == (self.num_critic_networks, batch_size), q_values.shape
         # ENDTODO
 
@@ -274,7 +277,8 @@ class SoftActorCritic(nn.Module):
         log_prob = action_distribution.log_prob(action)
 
         # TODO(Section 3.4): Compute the actor loss (replace the placeholder below)
-        loss = torch.tensor(0.0, device=obs.device) # replace this with the correct loss
+        loss = q_values.min(dim=0).values
+        loss = -loss.mean()
         # ENDTODO
 
         return loss, torch.mean(self.entropy(action_distribution)), log_prob
@@ -286,7 +290,8 @@ class SoftActorCritic(nn.Module):
         loss, entropy, log_prob = self.actor_loss_reparametrize(obs)
 
         # TODO(Section 3.3): Add the entropy bonus to the actor loss: loss -= [your entropy bonus here]
-        pass
+        if self.use_entropy_bonus:
+            loss -= self.get_temperature() * entropy
         # ENDTODO
 
         self.actor_optimizer.zero_grad()
@@ -364,7 +369,7 @@ class SoftActorCritic(nn.Module):
         # ENDTODO
 
         # TODO(Section 3.3): Enable the actor update (once you have implemented entropy)
-        actor_info = {}
+        actor_info = self.update_actor(observations)
         # ENDTODO
 
         # Update alpha (temperature) using dual gradient descent (Section 3.5)
